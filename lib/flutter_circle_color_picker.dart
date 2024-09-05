@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/widgets.dart';
 
 typedef ColorCodeBuilder = Widget Function(BuildContext context, Color color);
 
@@ -21,20 +20,23 @@ class CircleColorPickerController extends ChangeNotifier {
 
 class CircleColorPicker extends StatefulWidget {
   const CircleColorPicker({
-    Key? key,
     this.onChanged,
-    this.onEnded,
+    this.onEndChanged,
     this.size = const Size(280, 280),
     this.strokeWidth = 2,
     this.thumbSize = 32,
     this.controller,
+    this.dotSize = 64,
+    this.dotBorderWidth = 3,
+    this.showLightnessSlider = false,
+    this.showColorCode = false,
     this.textStyle = const TextStyle(
       fontSize: 24,
       fontWeight: FontWeight.bold,
       color: Colors.black,
     ),
     this.colorCodeBuilder,
-  }) : super(key: key);
+  });
 
   /// Called during a drag when the user is selecting a color.
   ///
@@ -44,7 +46,7 @@ class CircleColorPicker extends StatefulWidget {
   /// Called when drag ended.
   ///
   /// This callback called with latest color that user selected.
-  final ValueChanged<Color>? onEnded;
+  final ValueChanged<Color>? onEndChanged;
 
   /// An object to controll picker color dynamically.
   ///
@@ -73,11 +75,25 @@ class CircleColorPicker extends StatefulWidget {
   /// Default value is Black
   final TextStyle textStyle;
 
+  final double dotSize;
+
+  final double dotBorderWidth;
+
   /// Widget builder that show color code section.
   /// This functions is called every time color changed.
   ///
   /// Default is Text widget that shows rgb strings;
   final ColorCodeBuilder? colorCodeBuilder;
+
+  /// Determines whether to draw the [colorCodeBuilder]
+  ///
+  /// Default value is false
+  final bool showColorCode;
+
+  /// Determines whether to draw the [_LightnessSlider]
+  ///
+  /// Default value is false
+  final bool showLightnessSlider;
 
   Color get initialColor =>
       controller?.color ?? const Color.fromARGB(255, 255, 0, 0);
@@ -87,13 +103,16 @@ class CircleColorPicker extends StatefulWidget {
   double get initialHue => HSLColor.fromColor(initialColor).hue;
 
   @override
-  _CircleColorPickerState createState() => _CircleColorPickerState();
+  State<CircleColorPicker> createState() => _CircleColorPickerState();
 }
 
 class _CircleColorPickerState extends State<CircleColorPicker>
     with TickerProviderStateMixin {
   late AnimationController _lightnessController;
   late AnimationController _hueController;
+  late AnimationController _dotController;
+  // ignore: unused_field
+  late CurvedAnimation _dotCurvedAnimation;
 
   Color get _color {
     return HSLColor.fromAHSL(
@@ -131,40 +150,46 @@ class _CircleColorPickerState extends State<CircleColorPicker>
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
-                        widget.colorCodeBuilder != null
-                            ? widget.colorCodeBuilder!(context, _color)
-                            : Text(
-                                '#${_color.value.toRadixString(16).substring(2)}',
-                                style: widget.textStyle,
+                        if (widget.showColorCode)
+                          widget.colorCodeBuilder != null
+                              ? widget.colorCodeBuilder!(context, _color)
+                              : Text(
+                                  '#${_color.value.toRadixString(16).padLeft(8, "0").substring(2)}',
+                                  style: widget.textStyle,
+                                ),
+                        const SizedBox(height: 16),
+                        GestureDetector(
+                            onTapDown: _onTapDown,
+                            onTapUp: _onTapUp,
+                            onTapCancel: _onTapCancel,
+                            child: ScaleTransition(
+                              scale: _dotController,
+                              child: Container(
+                                width: widget.dotSize,
+                                height: widget.dotSize,
+                                decoration: BoxDecoration(
+                                  color: _color,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    width: widget.dotBorderWidth,
+                                    color: Colors.black.withOpacity(0.5),
+                                    //color: HSLColor.fromColor(_color).withLightness(_lightnessController.value * 4 / 5,).toColor(),
+                                  ),
+                                ),
                               ),
+                            )),
                         const SizedBox(height: 16),
-                        Container(
-                          width: 64,
-                          height: 64,
-                          decoration: BoxDecoration(
-                            color: _color,
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              width: 3,
-                              color: HSLColor.fromColor(_color)
-                                  .withLightness(
-                                    _lightnessController.value * 4 / 5,
-                                  )
-                                  .toColor(),
-                            ),
+                        if (widget.showLightnessSlider)
+                          _LightnessSlider(
+                            width: 140,
+                            thumbSize: 26,
+                            hue: _hueController.value,
+                            lightness: _lightnessController.value,
+                            onEnded: _onEnded,
+                            onChanged: (lightness) {
+                              _lightnessController.value = lightness;
+                            },
                           ),
-                        ),
-                        const SizedBox(height: 16),
-                        _LightnessSlider(
-                          width: 140,
-                          thumbSize: 26,
-                          hue: _hueController.value,
-                          lightness: _lightnessController.value,
-                          onEnded: _onEnded,
-                          onChanged: (lightness) {
-                            _lightnessController.value = lightness;
-                          },
-                        ),
                       ],
                     ),
                   );
@@ -192,6 +217,15 @@ class _CircleColorPickerState extends State<CircleColorPicker>
       lowerBound: 0,
       upperBound: 1,
     )..addListener(_onColorChanged);
+    _dotController = AnimationController(
+        vsync: this,
+        value: widget.initialLightness,
+        lowerBound: 0.9,
+        upperBound: 1,
+        duration: const Duration(milliseconds: 150))
+      ..addListener(_onColorChanged);
+    _dotCurvedAnimation =
+        CurvedAnimation(parent: _dotController, curve: Curves.fastOutSlowIn);
     widget.controller?.addListener(_setColor);
   }
 
@@ -207,7 +241,19 @@ class _CircleColorPickerState extends State<CircleColorPicker>
   }
 
   void _onEnded() {
-    widget.onEnded?.call(_color);
+    widget.onEndChanged?.call(_color);
+  }
+
+  void _onTapDown(_) {
+    _dotController.forward();
+  }
+
+  void _onTapUp(_) {
+    _dotController.reverse();
+  }
+
+  void _onTapCancel() {
+    _dotController.reverse();
   }
 
   void _setColor() {
@@ -221,14 +267,13 @@ class _CircleColorPickerState extends State<CircleColorPicker>
 
 class _LightnessSlider extends StatefulWidget {
   const _LightnessSlider({
-    Key? key,
     required this.hue,
     required this.lightness,
     required this.width,
     required this.onChanged,
     required this.onEnded,
     required this.thumbSize,
-  }) : super(key: key);
+  });
 
   final double hue;
 
@@ -275,9 +320,9 @@ class _LightnessSliderState extends State<_LightnessSlider>
                 horizontal: widget.thumbSize / 3,
               ),
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.all(Radius.circular(6)),
+                borderRadius: const BorderRadius.all(Radius.circular(6)),
                 gradient: LinearGradient(
-                  stops: [0, 0.4, 1],
+                  stops: const [0, 0.4, 1],
                   colors: [
                     HSLColor.fromAHSL(1, widget.hue, 1, 0).toColor(),
                     HSLColor.fromAHSL(1, widget.hue, 1, 0.5).toColor(),
@@ -315,7 +360,7 @@ class _LightnessSliderState extends State<_LightnessSlider>
       value: 1,
       lowerBound: 0.9,
       upperBound: 1,
-      duration: Duration(milliseconds: 50),
+      duration: const Duration(milliseconds: 50),
     );
   }
 
@@ -353,14 +398,13 @@ class _LightnessSliderState extends State<_LightnessSlider>
 
 class _HuePicker extends StatefulWidget {
   const _HuePicker({
-    Key? key,
     required this.hue,
     required this.onChanged,
     required this.onEnded,
     required this.size,
     required this.strokeWidth,
     required this.thumbSize,
-  }) : super(key: key);
+  });
 
   final double hue;
 
@@ -438,7 +482,7 @@ class _HuePickerState extends State<_HuePicker> with TickerProviderStateMixin {
       value: 1,
       lowerBound: 0.9,
       upperBound: 1,
-      duration: Duration(milliseconds: 50),
+      duration: const Duration(milliseconds: 50),
     );
   }
 
@@ -515,7 +559,7 @@ class _CirclePickerPainter extends CustomPainter {
     double radio = min(size.width, size.height) / 2 - strokeWidth;
 
     const sweepGradient = SweepGradient(
-      colors: const [
+      colors: [
         Color.fromARGB(255, 255, 0, 0),
         Color.fromARGB(255, 255, 255, 0),
         Color.fromARGB(255, 0, 255, 0),
@@ -546,10 +590,9 @@ class _CirclePickerPainter extends CustomPainter {
 
 class _Thumb extends StatelessWidget {
   const _Thumb({
-    Key? key,
     required this.size,
     required this.color,
-  }) : super(key: key);
+  });
 
   final double size;
 
@@ -560,21 +603,20 @@ class _Thumb extends StatelessWidget {
     return Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(
+      decoration: const BoxDecoration(
         shape: BoxShape.circle,
-        color: Color.fromARGB(255, 255, 255, 255),
+        color: Colors.black, //Color.fromARGB(255, 0, 0, 0),
         boxShadow: [
           BoxShadow(
-            color: Color.fromARGB(16, 0, 0, 0),
-            blurRadius: 4,
-            spreadRadius: 4,
-          )
+              color: Colors.black, //Color.fromARGB(16, 0, 0, 0),
+              blurRadius: 20,
+              spreadRadius: 10),
         ],
       ),
       alignment: Alignment.center,
       child: Container(
-        width: size - 6,
-        height: size - 6,
+        width: size - 10,
+        height: size - 10,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           color: color,
